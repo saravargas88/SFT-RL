@@ -1,12 +1,12 @@
 """Minimal evaluation script for MATH and Intellect test sets."""
 
 from pathlib import Path
-
+import json
 from datasets import load_dataset, load_from_disk
 from tqdm import tqdm
 from vllm import LLM, SamplingParams
 
-from cs336_alignment.drgrpo_grader import question_only_reward_fn
+from drgrpo_grader import question_only_reward_fn
 
 
 def load_prompt(name: str = "intellect") -> str:
@@ -15,20 +15,45 @@ def load_prompt(name: str = "intellect") -> str:
 
 
 def evaluate(llm, prompts, ground_truths):
+    #here : addd a recording of the results 
     """Run evaluation and return accuracy."""
     params = SamplingParams(temperature=0.0, max_tokens=2048)
     outputs = llm.generate(prompts, params)
 
     correct = 0
+    #tqdm is for progress bars 
+    results= []
     for i, output in enumerate(tqdm(outputs, desc="Grading")):
         text = output.outputs[0].text
         reward = question_only_reward_fn(text, ground_truths[i])
         correct += reward["reward"]
+        results.append( {
+            "output" : text , 
+            "gt" : ground_truths[i], 
+            "format_reward": reward['format_reward'], 
+            'answer_reward' : reward['answer_reward']})
+        
 
-    return correct / len(outputs)
+    accuracy= correct / len(outputs)
+    
+    return accurary , results 
 
 
+def math_baseline(results) : 
+    #eval how many generations fall into categories
+
+    cat_both_format_and_answer= [ r for r in results if r["format_reward"]==1 and r["answer_reward"]==1]
+    cat_format_not_answer=  [ r for r in results if r["format_reward"]==1 and r["answer_reward"]==0]
+    cat_notformat_yesaswer=  [ r for r in results if r["format_reward"]==0 and r["answer_reward"]==1]
+
+    print(f'Category 1: {cat_both_format_and_answer}')
+    print(f'Category 2: {cat_format_not_answer}')
+    print(f'Category 3:  {cat_notformat_yesaswer}')
+
+    
+    
 def main():
+
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="Qwen/Qwen2.5-Math-1.5B")
@@ -46,6 +71,7 @@ def main():
         gpu_memory_utilization=args.gpu_memory_utilization,
     )
 
+    '''
     # Evaluate on Intellect test
     print(f"\n=== Intellect Test ({args.intellect_path}) ===")
     dataset = load_from_disk(args.intellect_path)
@@ -63,7 +89,9 @@ def main():
     print(f"[Sample] {prompts[0][:200]}...")
     acc = evaluate(llm, prompts, gts)
     print(f"Intellect Accuracy: {acc:.4f}")
+    '''
 
+    
     # Evaluate on MATH
     print("\n=== MATH Test ===")
     math_ds = load_dataset("hiyouga/math12k", split="test")
@@ -74,8 +102,18 @@ def main():
     gts = [ex["answer"] for ex in math_ds]
 
     print(f"[Sample] {prompts[0][:200]}...")
-    acc = evaluate(llm, prompts, gts)
+    acc, results = evaluate(llm, prompts, gts)
     print(f"MATH Accuracy: {acc:.4f}")
+
+    with open('math_results.json', 'w') as f: 
+        json.dump(results, f, indent=2)
+
+    math_baseline(results)
+
+    
+
+        
+        
 
 
 if __name__ == "__main__":
