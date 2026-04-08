@@ -117,16 +117,15 @@ def make_sft_collate(tokenizer):
 
     return collate_fn
 
+def init_wandb(args):
 
-def init_wandb(args: argparse.Namespace, model: torch.nn.Module) -> None:
-    if args.disable_wandb:
-        return
     wandb.init(
         project=args.wandb_project,
-        entity=args.wandb_entity,
+        entity="saravargasmar-new-york-university",
         name=args.run_name,
         config=vars(args),
     )
+
     wandb.define_metric("train_step")
     wandb.define_metric("eval_step")
     wandb.define_metric("train/*", step_metric="train_step")
@@ -270,7 +269,9 @@ def main() -> None:
             gpu_memory_utilization=args.gpu_memory_utilization,
         )
 
-    init_wandb(args, policy)
+    config = vars(args).copy()
+    config["effective_batch_size"] = args.per_device_batch_size * args.gradient_accumulation_steps
+    init_wandb(args, config)
 
     prime_val_prompts, prime_val_gts = build_prime_prompts(prime_val_dataset)
     math_val_prompts, math_val_gts = build_math_prompts(math_val_dataset, prompt_template)
