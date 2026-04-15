@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "SFT-RL",
+			"path": ".."
+		},
+		{
+			"name": "data-distrib",
+			"path": "../../nyu-llm-reasoners-a3/data-distrib"
+		}
+	],
+	"settings": {}
+}

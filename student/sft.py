@@ -6,16 +6,23 @@ from transformers import PreTrainedTokenizerBase
 
 
 '''
-SFT : we are initializing a model and then fne tuning it on a ds of 
+SFT : we are initializing a model and then fine tuning it on a dataset of 
 
-propmt, response pairs
+(prompt, response) pairs
 
-We are then going to so n steps of sampling a batch of pairs 
-compute the crossentropy loss between model ouput and response output 
+We are then going to take n steps of sampling a batch of pairs 
+compute the crossentropy loss between model output and response output 
 update the model parameteres taking the gradient step 
 
 
 '''
+#1: TOKENIZE AND CONSTRUCT RESPONSE MASK : 
+# we have to tokenize the prompt and response separately because we need to know 
+# where the prompt ends and response starts in order to construct the response mask 
+
+# The response mask is a boolean tensor that tells us which tokens in the input 
+# are part of the response and which are part of the prompt
+
 
 def tokenize_prompt_and_output(
     prompt_strs: list[str],
@@ -24,20 +31,17 @@ def tokenize_prompt_and_output(
 ) -> dict[str, Tensor]:
     
     '''
-    
     First tokenize the prompt and output the strings separately
     Then join them together and construct a response_mask
-    
-    
     Returns: disctionary of keys: input_ids, labels, response_mask
     '''
     
-    #1_ tokenize the prompt and output strings separately
+    #1. tokenize the prompt and output strings separately
     prompt_tokens = tokenizer(prompt_strs, add_special_tokens=False)["input_ids"]
     output_tokens = tokenizer(output_strs, add_special_tokens=False)["input_ids"]
     
 
-    #2response mask 
+    #2. response mask 
     prompt_lens = torch.tensor([len(ids) for ids in prompt_tokens], dtype=torch.long)
     
     concatenated_ids = [
@@ -72,6 +76,8 @@ def tokenize_prompt_and_output(
 
 def compute_entropy(logits: torch.Tensor) -> torch.Tensor:
     """Compute entropy over the vocabulary dimension for each token position."""
+    
+    
     log_probs = torch.log_softmax(logits, dim=-1)
     probs = torch.softmax(logits, dim=-1)
     return -(probs * log_probs).sum(dim=-1)

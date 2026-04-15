@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from student.drgrpo_grader import question_only_reward_fn
 from student.sft import get_response_log_probs, sft_microbatch_train_step, tokenize_prompt_and_output
 
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run SFT on math reasoning data.")
@@ -29,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prime-val-path", required=True, help="Path to Prime Intellect validation/test split.")
     parser.add_argument("--prime-test-path", default=None, help="Optional path to Prime Intellect test split.")
     parser.add_argument("--math-val-dataset", default="hiyouga/math12k")
-    parser.add_argument("--math-val-split", default="validation")
+    parser.add_argument("--math-val-split", default="test")
     parser.add_argument("--math-test-split", default="test")
     parser.add_argument("--prompt-name", default="intellect")
     parser.add_argument("--output-dir", required=True)
@@ -117,20 +123,20 @@ def make_sft_collate(tokenizer):
 
     return collate_fn
 
-def init_wandb(args):
 
+def init_wandb(args, config=None):
+    mode = "disabled" if args.disable_wandb or not os.environ.get("WANDB_API_KEY") else "online"
     wandb.init(
         project=args.wandb_project,
-        entity="saravargasmar-new-york-university",
+        entity=args.wandb_entity,
         name=args.run_name,
-        config=vars(args),
+        config=config or vars(args),
+        mode=mode,
     )
-
     wandb.define_metric("train_step")
     wandb.define_metric("eval_step")
     wandb.define_metric("train/*", step_metric="train_step")
     wandb.define_metric("eval/*", step_metric="eval_step")
-
 
 def log_metrics(metrics: dict[str, Any]) -> None:
     if wandb.run is not None:
@@ -155,6 +161,7 @@ def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: flo
             enable_prefix_caching=True,
             gpu_memory_utilization=gpu_memory_utilization,
             trust_remote_code=True,
+            enforce_eager=True,
         )
 
 
@@ -224,6 +231,50 @@ def save_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2))
 
 
+def save_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.write_text("\n".join(json.dumps(row) for row in rows) + ("\n" if rows else ""))
+
+
+def maybe_write_curves(output_dir: Path, train_history: list[dict[str, Any]], eval_history: list[dict[str, Any]]) -> None:
+    save_jsonl(output_dir / "train_history.jsonl", train_history)
+    save_jsonl(output_dir / "eval_history.jsonl", eval_history)
+    if plt is None:
+        return
+
+    if train_history:
+        plt.figure(figsize=(8, 5))
+        plt.plot([row["train_step"] for row in train_history], [row["loss"] for row in train_history], label="train_loss")
+        plt.xlabel("Train step")
+        plt.ylabel("Loss")
+        plt.title("SFT Training Loss")
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(output_dir / "train_loss_curve.png", dpi=160)
+        plt.close()
+
+    if eval_history:
+        plt.figure(figsize=(8, 5))
+        plt.plot(
+            [row["train_step"] for row in eval_history],
+            [row["prime_val_accuracy"] for row in eval_history],
+            label="Prime val accuracy",
+        )
+        plt.plot(
+            [row["train_step"] for row in eval_history],
+            [row["math_val_accuracy"] for row in eval_history],
+            label="MATH val accuracy",
+        )
+        plt.xlabel("Train step")
+        plt.ylabel("Accuracy")
+        plt.title("SFT Validation Accuracy")
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(output_dir / "val_accuracy_curve.png", dpi=160)
+        plt.close()
+
+
 def main() -> None:
     args = parse_args()
     set_seed(args.seed)
@@ -278,6 +329,8 @@ def main() -> None:
 
     train_step = 0
     eval_step = 0
+    train_history: list[dict[str, Any]] = []
+    eval_history: list[dict[str, Any]] = []
     optimizer.zero_grad(set_to_none=True)
     progress = tqdm(total=args.max_train_steps, disable=args.max_train_steps is None, desc="SFT")
 
@@ -309,11 +362,19 @@ def main() -> None:
                 progress.update(1)
 
                 batch_response_tokens = response_mask.sum().item()
+                train_row = {
+                    "train_step": train_step,
+                    "loss": loss.item(),
+                    "per_example_loss": metadata["per_example_loss"].mean().item(),
+                    "response_tokens": batch_response_tokens,
+                    "epoch": epoch,
+                }
+                train_history.append(train_row)
                 log_metrics(
                     {
                         "train_step": train_step,
-                        "train/loss": loss.item(),
-                        "train/per_example_loss": metadata["per_example_loss"].mean().item(),
+                        "train/loss": train_row["loss"],
+                        "train/per_example_loss": train_row["per_example_loss"],
                         "train/response_tokens": batch_response_tokens,
                         "train/epoch": epoch,
                     }
@@ -336,6 +397,14 @@ def main() -> None:
                             "eval_step": eval_step,
                             "eval/prime_val_accuracy": prime_val_acc,
                             "eval/math_val_accuracy": math_val_acc,
+                        }
+                    )
+                    eval_history.append(
+                        {
+                            "eval_step": eval_step,
+                            "train_step": train_step,
+                            "prime_val_accuracy": prime_val_acc,
+                            "math_val_accuracy": math_val_acc,
                         }
                     )
                     print(
@@ -389,7 +458,18 @@ def main() -> None:
         )
 
     log_metrics({"eval_step": eval_step, **{f"eval/{k}": v for k, v in results.items() if isinstance(v, (float, int))}})
+    eval_history.append(
+        {
+            "eval_step": eval_step,
+            "train_step": train_step,
+            "prime_val_accuracy": results["prime_val_accuracy"],
+            "math_val_accuracy": results["math_val_accuracy"],
+            "prime_test_accuracy": results.get("prime_test_accuracy"),
+            "math_test_accuracy": results["math_test_accuracy"],
+        }
+    )
     save_json(output_dir / "results.json", results)
+    maybe_write_curves(output_dir, train_history, eval_history)
     print(json.dumps(results, indent=2))
 
     if wandb.run is not None:
