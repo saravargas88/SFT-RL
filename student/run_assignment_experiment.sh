@@ -29,7 +29,7 @@ mkdir -p logs
 singularity exec --bind /scratch --nv \
 --overlay /scratch/sv2279/overlay-25GB-500K.ext3:r \
 /scratch/sv2279/ubuntu-20.04.3.sif \
-/bin/bash -c
+/bin/bash -c "
 
 source /ext3/miniconda3/etc/profile.d/conda.sh
 export PATH=/ext3/miniconda3/bin:\$PATH
