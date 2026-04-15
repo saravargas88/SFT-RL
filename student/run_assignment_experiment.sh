@@ -7,6 +7,9 @@
 #SBATCH --time=24:00:00
 #SBATCH --gres=gpu:2
 #SBATCH --requeue
+#SBATCH --mail-type=all
+#SBATCH --mail-user=sv2279@nyu.edu
+
 
 set -euo pipefail
 
@@ -24,9 +27,10 @@ HPC_ENV_FILE="${HPC_ENV_FILE:-${CLUSTER_PROJECT_ROOT}/student/hpc_sv2279.env}"
 mkdir -p logs
 
 singularity exec --bind /scratch --nv \
-  --overlay "${SINGULARITY_OVERLAY}" \
-  "${SINGULARITY_IMAGE}" \
-  /bin/bash -lc "
+--overlay /scratch/sv2279/overlay-25GB-500K.ext3:r \
+/scratch/sv2279/ubuntu-20.04.3.sif \
+/bin/bash -c
+
 source /ext3/miniconda3/etc/profile.d/conda.sh
 export PATH=/ext3/miniconda3/bin:\$PATH
 set -euo pipefail
